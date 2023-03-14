@@ -1,3 +1,4 @@
 pyserial
 crcmod
 tabulate
+csv23

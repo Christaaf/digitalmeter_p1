@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 # This script will read data from serial connected to the digital meter P1 port
 
@@ -6,6 +6,8 @@
 # https://www.jensd.be
 # https://github.com/jensdepuydt
 
+import csv
+import os.path
 import serial
 import sys
 import crcmod.predefined
@@ -17,14 +19,15 @@ serialport = '/dev/ttyUSB0'
 
 # Enable debug if needed:
 debug = False
+#debug = True
 
 # Add/update OBIS codes here:
 obiscodes = {
     "0-0:1.0.0": "Timestamp",
     "0-0:96.3.10": "Switch electricity",
     "0-1:24.4.0": "Switch gas",
-    "0-0:96.1.1": "Meter serial electricity",
-    "0-1:96.1.1": "Meter serial gas",
+#    "0-0:96.1.1": "Meter serial electricity",
+#    "0-1:96.1.1": "Meter serial gas",
     "0-0:96.14.0": "Current rate (1=day,2=night)",
     "1-0:1.8.1": "Rate 1 (day) - total consumption",
     "1-0:1.8.2": "Rate 2 (night) - total consumption",
@@ -44,8 +47,22 @@ obiscodes = {
     "1-0:31.7.0": "L1 current",
     "1-0:51.7.0": "L2 current",
     "1-0:71.7.0": "L3 current",
-    "0-1:24.2.3": "Gas consumption"
+    "0-1:24.2.3": "Gas consumption",
+    "0-1:24.2.1": "Gas consumption"
     }
+
+def writeCsv(filename, rowData):
+    file_exists = os.path.isfile(filename)
+    with open (filename, 'a') as csvfile:
+        headers = list(rowData.keys())
+        #['TimeStamp', 'light', 'Proximity']
+        writer = csv.DictWriter(csvfile, delimiter=',', lineterminator='\n',fieldnames=headers)
+
+        if not file_exists:
+            writer.writeheader()  # file doesn't exist yet, write a header
+
+        writer.writerow(rowData)
+    return
 
 
 def checkcrc(p1telegram):
@@ -83,9 +100,6 @@ def parsetelegramline(p1line):
         # format:OBIS(value), gas: OBIS(timestamp)(value)
         values = re.findall(r'\(.*?\)', p1line)
         value = values[0][1:-1]
-        # timestamp requires removal of last char
-        if obis == "0-0:1.0.0" or len(values) > 1:
-            value = value[:-1]
         # report of connected gas-meter...
         if len(values) > 1:
             timestamp = value
@@ -93,24 +107,30 @@ def parsetelegramline(p1line):
         # serial numbers need different parsing: (hex to ascii)
         if "96.1.1" in obis:
             value = bytearray.fromhex(value).decode()
-        else:
-            # separate value and unit (format:value*unit)
+        elif not"1.0.0" in obis:
+            # Timestamp cannot be parsed as a float.
+            # Other lines: separate value and unit (format:value*unit)
             lvalue = value.split("*")
             value = float(lvalue[0])
             if len(lvalue) > 1:
                 unit = lvalue[1]
-        # return result in tuple: description,value,unit,timestamp
+        # return result in a dict: description,value,unit
         if debug:
             print (f"description:{obiscodes[obis]}, \
                      value:{value}, \
                      unit:{unit}")
-        return (obiscodes[obis], value, unit)
+        return { "desc": obiscodes[obis], "value": value, "unit": unit }
     else:
-        return ()
+        return {}
 
 
 def main():
-    ser = serial.Serial(serialport, 115200, xonxoff=1)
+    try:
+        ser = serial.Serial(serialport, 115200, xonxoff=1)
+    except serial.serialutil.SerialException:
+        print(f"Could not open {serialport}")
+        return
+
     p1telegram = bytearray()
     while True:
         try:
@@ -136,13 +156,16 @@ def main():
                     print('*' * 40)
                 if checkcrc(p1telegram):
                     # parse telegram contents, line by line
-                    output = []
+                    output = {}
                     for line in p1telegram.split(b'\r\n'):
                         r = parsetelegramline(line.decode('ascii'))
                         if r:
-                            output.append(r)
+                            output[r["desc"]]=r["value"]
                             if debug:
-                                print(f"desc:{r[0]}, val:{r[1]}, u:{r[2]}")
+                                print(f"desc:{r['desc']}, val:{r['value']}, u:{r['unit']}")
+#                    print(output)
+                    date = output['Timestamp'][0:6]
+#                    writeCsv(f"{date}.csv", output)
                     print(tabulate(output,
                                    headers=['Description', 'Value', 'Unit'],
                                    tablefmt='github'))
