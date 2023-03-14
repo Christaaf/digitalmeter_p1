@@ -1,25 +1,31 @@
-# Belgian Digital Meter script for the P1 port
-Script to parse P1 output of the Belgian electricity meter.
+# Digital Meter script for the P1 port
+Script to parse P1 output of a (Dutch) electricity meter.
 
 Prerequisites:
 ==============
 Hardware:
 - Digital Meter (Sagecom S211: Single phase, Sagecom T211-D : Three-phase and Flonidan - G4SRTV: Natural gas (as slave of the first two)
-- Cable to connect to the meter (RJ11/RJ12), either serial or premade including USB to serial
+- Cable to connect to the meter (RJ11/RJ12). I used this one: https://webshop.cedel.nl/Slimme-meter-kabel-P1-naar-USB .
 
 Software
-Either use requirements.txt:
+Most universal is to use requirements.txt:
 ```
 pip install -r requirements.txt;
 ```
 
-Or install with your package manager:
+If, like me, you want to attach the USB cable to your Synology diskstation (which I happen to keep in the meter cupboard) running DSM6, you'll probably find it doesn't work out-of-the-box. For some reason (probably some udev rules somewhere) the kernel doesn't load the correct modules when the USB-device is inserted. You can fix this manually when logged into your DiskStation over SSH:
+
 ```
-jensd@deb10:~$ sudo apt install python3-serial python3-crcmod python3-tabulate
-Reading package lists… Done
-Building dependency tree
-...
-Setting up python3-serial (3.4-4) ...
+$ ssh diskstation
+user@diskstation$ sudo insmod /lib/modules/usbserial.ko
+user@diskstation$ sudo insmod /lib/modules/ftdi_sio.ko
+
+```
+Also, you probably don't have pip on your DiskStation. I installed it with some commands as listed here: https://stackoverflow.com/a/51794225. No need to download and run any get-pip.py scripts. I recall commands like these:
+
+```
+user@diskstation$ python3 -m venv env
+user@diskstation$ python3 -m ensurepip 
 ```
 
 Adjustments/configuration:
@@ -40,5 +46,5 @@ obiscodes = {}
 
 More information
 ================
-I created a blogpost where I elaborate about P1 port and data format to parse
+I based this on a script from Jensd, who created a blogpost where he elaborates about P1 port and data format to parse
 This can be found here: https://jensd.be/1183/linux/read-data-from-the-belgian-digital-meter-through-the-p1-port
