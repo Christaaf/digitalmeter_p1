@@ -7,12 +7,14 @@
 # https://github.com/jensdepuydt
 
 import csv
+import time
 import os.path
 import serial
 import sys
 import crcmod.predefined
 import re
 from tabulate import tabulate
+from datetime import datetime
 
 # Change your serial port here:
 serialport = '/dev/ttyUSB0'
@@ -50,6 +52,23 @@ obiscodes = {
     "0-1:24.2.3": "Gas consumption",
     "0-1:24.2.1": "Gas consumption"
     }
+
+def toUnixtime(p1time):
+    ### Returns seconds since 1-1-1970 UTC ###
+    # Python's timezone handling is a mess, fixing the string to parse seems to work best.
+    offset = "+0000"
+    lastChar = p1time[-1]
+    if lastChar == 'W':
+       offset = "+0100"
+    elif lastChar == 'S':
+       offset = "+0200"
+    else:
+       print(f"Unknown timezone {lastChar}, assuming UTC.")
+                                           
+    toParse = p1time[:-1] + offset;
+    dt = datetime.strptime(toParse, '%y%m%d%H%M%S%z')
+    return int(dt.timestamp())
+
 
 def writeCsv(filename, rowData):
     file_exists = os.path.isfile(filename)
@@ -137,15 +156,15 @@ def main():
             # read input from serial port
             p1line = ser.readline()
             if debug:
-                print ("Reading: ", p1line.strip())
+                print("Reading: ", p1line.strip())
             # P1 telegram starts with /
             # We need to create a new empty telegram
             if "/" in p1line.decode('ascii'):
                 if debug:
-                    print ("Found beginning of P1 telegram")
+                    print("Found beginning of P1 telegram")
+                    print('*' * 60 + "\n")
                 p1telegram = bytearray()
-                print('*' * 60 + "\n")
-            # add line to complete telegram
+                # add line to complete telegram
             p1telegram.extend(p1line)
             # P1 telegram ends with ! + CRC16 checksum
             if "!" in p1line.decode('ascii'):
@@ -164,11 +183,20 @@ def main():
                             if debug:
                                 print(f"desc:{r['desc']}, val:{r['value']}, u:{r['unit']}")
 #                    print(output)
+#                    print(tabulate(output,
+#                                   headers=['Description', 'Value', 'Unit'],
+#                                   tablefmt='github'))
                     date = output['Timestamp'][0:6]
-#                    writeCsv(f"{date}.csv", output)
-                    print(tabulate(output,
-                                   headers=['Description', 'Value', 'Unit'],
-                                   tablefmt='github'))
+                    writeCsv(f"{date}.csv", output)
+                    
+                    short = {}
+                    short["timestamp"] = toUnixtime(output['Timestamp'])
+                    short["Total consumption"] = output["Rate 1 (day) - total consumption"] + output["Rate 2 (night) - total consumption"]
+                    short["Total production"] = output["Rate 1 (day) - total production"] + output["Rate 2 (night) - total production"]
+
+                    writeCsv(f"data/{date}_summed.csv", short)
+#                    minute = output['Timestamp'][0:10]
+#                    writeCsv(f"{minute}.csv", output)
         except KeyboardInterrupt:
             print("Stopping...")
             ser.close()
@@ -184,3 +212,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

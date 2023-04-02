@@ -2,3 +2,4 @@ pyserial
 crcmod
 tabulate
 csv23
+datetime
