@@ -30,7 +30,7 @@ debug = False
 #debug = True
 
 DATA_LOCK = threading.Lock()
-latest_data = ""
+LATEST_DATA = ""
 
 # Add/update OBIS codes here:
 obiscodes = {
@@ -72,7 +72,7 @@ def to_unixtime(p1time):
     elif last_char == 'S':
         offset = "+0200"
     else:
-        print(f"Unknown timezone {lastChar}, assuming UTC.")
+        print(f"Unknown timezone {last_char}, assuming UTC.")
 
     to_parse = p1time[:-1] + offset
     unixtime = datetime.strptime(to_parse, '%y%m%d%H%M%S%z')
@@ -162,7 +162,7 @@ def main():
     thread.start()
     print("serving at port", PORT)
 
-    global latest_data
+    global LATEST_DATA
 
     p1telegram = bytearray()
 
@@ -216,7 +216,7 @@ def main():
 
                     json = f"{{\"ts\":\"{timestamp}\",\"c\":\"{consumption}\",\"p\":\"{production}\"}}"
                     with DATA_LOCK:
-                        latest_data = json
+                        LATEST_DATA = json
 #                    minute = output['Timestamp'][0:10]
 #                    writeCsv(f"{minute}.csv", output)
         except KeyboardInterrupt:
@@ -243,7 +243,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if "?live" in self.path:
             data = ""
             with DATA_LOCK:
-                data = latest_data
+                data = LATEST_DATA
             print("Data: ", data)
             self.protocol_version = 'HTTP/1.1'
             self.send_response(200)
