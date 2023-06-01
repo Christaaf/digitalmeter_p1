@@ -7,21 +7,30 @@
 # https://github.com/jensdepuydt
 
 import csv
-import time
+import http.server
 import os.path
-import serial
-import sys
-import crcmod.predefined
 import re
-from tabulate import tabulate
+import threading
 from datetime import datetime
 
+import crcmod.predefined
+import serial
+
+# The port the webserver listens on
+PORT = 7592
+
+# The folder shared by the webserver.
+DATA_FOLDER = "data"
+
 # Change your serial port here:
-serialport = '/dev/ttyUSB0'
+SERIALPORT = '/dev/ttyUSB0'
 
 # Enable debug if needed:
 debug = False
 #debug = True
+
+DATA_LOCK = threading.Lock()
+latest_data = ""
 
 # Add/update OBIS codes here:
 obiscodes = {
@@ -53,35 +62,34 @@ obiscodes = {
     "0-1:24.2.1": "Gas consumption"
     }
 
-def toUnixtime(p1time):
+def to_unixtime(p1time):
     ### Returns seconds since 1-1-1970 UTC ###
     # Python's timezone handling is a mess, fixing the string to parse seems to work best.
     offset = "+0000"
-    lastChar = p1time[-1]
-    if lastChar == 'W':
-       offset = "+0100"
-    elif lastChar == 'S':
-       offset = "+0200"
+    last_char = p1time[-1]
+    if last_char == 'W':
+        offset = "+0100"
+    elif last_char == 'S':
+        offset = "+0200"
     else:
-       print(f"Unknown timezone {lastChar}, assuming UTC.")
-                                           
-    toParse = p1time[:-1] + offset;
-    dt = datetime.strptime(toParse, '%y%m%d%H%M%S%z')
-    return int(dt.timestamp())
+        print(f"Unknown timezone {lastChar}, assuming UTC.")
+
+    to_parse = p1time[:-1] + offset
+    unixtime = datetime.strptime(to_parse, '%y%m%d%H%M%S%z')
+    return int(unixtime.timestamp())
 
 
-def writeCsv(filename, rowData):
+def write_csv(filename, row_data):
     file_exists = os.path.isfile(filename)
     with open (filename, 'a') as csvfile:
-        headers = list(rowData.keys())
+        headers = list(row_data.keys())
         #['TimeStamp', 'light', 'Proximity']
         writer = csv.DictWriter(csvfile, delimiter=',', lineterminator='\n',fieldnames=headers)
 
         if not file_exists:
             writer.writeheader()  # file doesn't exist yet, write a header
 
-        writer.writerow(rowData)
-    return
+        writer.writerow(row_data)
 
 
 def checkcrc(p1telegram):
@@ -106,7 +114,6 @@ def checkcrc(p1telegram):
 def parsetelegramline(p1line):
     # parse a single line of the telegram and try to get relevant data from it
     unit = ""
-    timestamp = ""
     if debug:
         print(f"Parsing:{p1line}")
     # get OBIS code from line (format:OBIS(value)
@@ -121,7 +128,6 @@ def parsetelegramline(p1line):
         value = values[0][1:-1]
         # report of connected gas-meter...
         if len(values) > 1:
-            timestamp = value
             value = values[1][1:-1]
         # serial numbers need different parsing: (hex to ascii)
         if "96.1.1" in obis:
@@ -139,18 +145,27 @@ def parsetelegramline(p1line):
                      value:{value}, \
                      unit:{unit}")
         return { "desc": obiscodes[obis], "value": value, "unit": unit }
-    else:
-        return {}
+    return {}
 
 
 def main():
+    # Open the serial port.
     try:
-        ser = serial.Serial(serialport, 115200, xonxoff=1)
+        ser = serial.Serial(SERIALPORT, 115200, xonxoff=1)
     except serial.serialutil.SerialException:
-        print(f"Could not open {serialport}")
+        print(f"Could not open {SERIALPORT}")
         return
 
+    # Start a webserver thread. it's a daemon thread, so it will stop when the main program stops.
+    httpd = http.server.ThreadingHTTPServer(("", PORT), Handler)
+    thread = threading.Thread(name="server", target=httpd.serve_forever, daemon=True)
+    thread.start()
+    print("serving at port", PORT)
+
+    global latest_data
+
     p1telegram = bytearray()
+
     while True:
         try:
             # read input from serial port
@@ -177,24 +192,31 @@ def main():
                     # parse telegram contents, line by line
                     output = {}
                     for line in p1telegram.split(b'\r\n'):
-                        r = parsetelegramline(line.decode('ascii'))
-                        if r:
-                            output[r["desc"]]=r["value"]
+                        row = parsetelegramline(line.decode('ascii'))
+                        if row:
+                            output[row["desc"]]=row["value"]
                             if debug:
-                                print(f"desc:{r['desc']}, val:{r['value']}, u:{r['unit']}")
+                                print(f"desc:{row['desc']}, val:{row['value']}, u:{row['unit']}")
 #                    print(output)
 #                    print(tabulate(output,
 #                                   headers=['Description', 'Value', 'Unit'],
 #                                   tablefmt='github'))
                     date = output['Timestamp'][0:6]
-                    writeCsv(f"data/{date}.csv", output)
-                    
-                    short = {}
-                    short["timestamp"] = toUnixtime(output['Timestamp'])
-                    short["Total consumption"] = output["Rate 1 (day) - total consumption"] + output["Rate 2 (night) - total consumption"]
-                    short["Total production"] = output["Rate 1 (day) - total production"] + output["Rate 2 (night) - total production"]
+                    write_csv(f"data/{date}.csv", output)
 
-                    writeCsv(f"data/{date}_summed.csv", short)
+                    timestamp = to_unixtime(output['Timestamp'])
+                    consumption = output["Rate 1 (day) - total consumption"] + output["Rate 2 (night) - total consumption"]
+                    production = output["Rate 1 (day) - total production"] + output["Rate 2 (night) - total production"]
+                    short = {}
+                    short["timestamp"] = timestamp
+                    short["Total consumption"] = consumption
+                    short["Total production"] = production
+
+                    write_csv(f"data/{date}_summed.csv", short)
+
+                    json = f"{{\"ts\":\"{timestamp}\",\"c\":\"{consumption}\",\"p\":\"{production}\"}}"
+                    with DATA_LOCK:
+                        latest_data = json
 #                    minute = output['Timestamp'][0:10]
 #                    writeCsv(f"{minute}.csv", output)
         except KeyboardInterrupt:
@@ -210,6 +232,27 @@ def main():
         # flush the buffer
         ser.flush()
 
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=DATA_FOLDER, **kwargs)
+
+    def do_GET(self):
+#      print("Intercepted " + self.path)
+# When '?live' is present in the URL, we eonly return the last data read.
+        if "?live" in self.path:
+            data = ""
+            with DATA_LOCK:
+                data = latest_data
+            print("Data: ", data)
+            self.protocol_version = 'HTTP/1.1'
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(f"{data}".encode("utf-8"))
+            return
+# Without '?live' in the URL, we serve the requested file (from the 'root' directory specified above).
+        http.server.SimpleHTTPRequestHandler.do_GET(self)
+
 if __name__ == '__main__':
     main()
-
