@@ -187,7 +187,7 @@ def main():
 #                                   headers=['Description', 'Value', 'Unit'],
 #                                   tablefmt='github'))
                     date = output['Timestamp'][0:6]
-                    writeCsv(f"{date}.csv", output)
+                    writeCsv(f"data/{date}.csv", output)
                     
                     short = {}
                     short["timestamp"] = toUnixtime(output['Timestamp'])
