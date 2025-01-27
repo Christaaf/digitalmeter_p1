@@ -16,8 +16,6 @@ from datetime import datetime
 import crcmod.predefined
 import serial
 
-# The port the webserver listens on
-PORT = 7592
 
 # The folder shared by the webserver.
 DATA_FOLDER = "data"
@@ -62,21 +60,6 @@ obiscodes = {
     "0-1:24.2.1": "Gas consumption"
     }
 
-def to_unixtime(p1time):
-    ### Returns seconds since 1-1-1970 UTC ###
-    # Python's timezone handling is a mess, fixing the string to parse seems to work best.
-    offset = "+0000"
-    last_char = p1time[-1]
-    if last_char == 'W':
-        offset = "+0100"
-    elif last_char == 'S':
-        offset = "+0200"
-    else:
-        print(f"Unknown timezone {last_char}, assuming UTC.")
-
-    to_parse = p1time[:-1] + offset
-    unixtime = datetime.strptime(to_parse, '%y%m%d%H%M%S%z')
-    return int(unixtime.timestamp())
 
 
 def write_csv(filename, row_data):
@@ -156,12 +139,6 @@ def main():
         print(f"Could not open {SERIALPORT}")
         return
 
-    # Start a webserver thread. it's a daemon thread, so it will stop when the main program stops.
-    httpd = http.server.ThreadingHTTPServer(("", PORT), Handler)
-    thread = threading.Thread(name="server", target=httpd.serve_forever, daemon=True)
-    thread.start()
-    print("serving at port", PORT)
-
     global LATEST_DATA
 
     p1telegram = bytearray()
@@ -204,15 +181,6 @@ def main():
                     date = output['Timestamp'][0:6]
                     write_csv(f"data/{date}.csv", output)
 
-                    timestamp = to_unixtime(output['Timestamp'])
-                    consumption = output["Rate 1 (day) - total consumption"] + output["Rate 2 (night) - total consumption"]
-                    production = output["Rate 1 (day) - total production"] + output["Rate 2 (night) - total production"]
-                    short = {}
-                    short["timestamp"] = timestamp
-                    short["Total consumption"] = consumption
-                    short["Total production"] = production
-
-                    write_csv(f"data/{date}_summed.csv", short)
 
                     json = f"{{\"ts\":\"{timestamp}\",\"c\":\"{consumption}\",\"p\":\"{production}\"}}"
                     with DATA_LOCK:
@@ -232,27 +200,6 @@ def main():
         # flush the buffer
         ser.flush()
 
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=DATA_FOLDER, **kwargs)
-
-    def do_GET(self):
-#      print("Intercepted " + self.path)
-# When '?live' is present in the URL, we eonly return the last data read.
-        if "?live" in self.path:
-            data = ""
-            with DATA_LOCK:
-                data = LATEST_DATA
-            print("Data: ", data)
-            self.protocol_version = 'HTTP/1.1'
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            self.wfile.write(f"{data}".encode("utf-8"))
-            return
-# Without '?live' in the URL, we serve the requested file (from the 'root' directory specified above).
-        http.server.SimpleHTTPRequestHandler.do_GET(self)
 
 if __name__ == '__main__':
     main()
